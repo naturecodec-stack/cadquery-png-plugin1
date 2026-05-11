@@ -1,11 +1,13 @@
 from vtkmodules.vtkFiltersExtraction import vtkExtractCellsByType
 from vtkmodules.vtkCommonDataModel import VTK_TRIANGLE, VTK_LINE, VTK_VERTEX
+from vtkmodules.vtkFiltersCore import vtkFeatureEdges, vtkPolyDataNormals         # ✅ NEW: real feature edge extractor
 from vtkmodules.vtkRenderingCore import (
     vtkRenderer,
     vtkRenderWindow,
     vtkGraphicsFactory,
     vtkWindowToImageFilter,
     vtkActor,
+    vtkLight,                                                   # ✅ NEW: for lighting
     vtkPolyDataMapper as vtkMapper,
 )
 from vtkmodules.vtkIOImage import vtkPNGWriter
@@ -34,41 +36,56 @@ def convert_assembly_to_vtk(assy, edge_width, color_theme, edge_color):
 
         # Tesselate the CQ object into VTK data
         vtk_data = shape.toVtkPolyData(1e-3, 0.1)
+        normals = vtkPolyDataNormals()
+        normals.SetInputDataObject(vtk_data)
+        normals.ComputePointNormalsOn()
+        normals.ComputeCellNormalsOn()
+        normals.SplittingOff()        # keeps smooth edges
+        normals.Update()
+        vtk_data = normals.GetOutput()
 
-        # Extract faces
+        # Extract triangle faces
         extr = vtkExtractCellsByType()
         extr.SetInputDataObject(vtk_data)
-
-        extr.AddCellType(VTK_LINE)
-        extr.AddCellType(VTK_VERTEX)
-        extr.Update()
-        data_edges = extr.GetOutput()
-
-        # Extract edges
-        extr = vtkExtractCellsByType()
-        extr.SetInputDataObject(vtk_data)
-
         extr.AddCellType(VTK_TRIANGLE)
         extr.Update()
         data_faces = extr.GetOutput()
 
-        # Remove normals from edges
-        data_edges.GetPointData().RemoveArray("Normals")
+        # ✅ FIX: Use vtkFeatureEdges to extract real CAD boundary/feature edges
+        # (sharp creases, boundary edges, non-manifold edges) instead of
+        # raw VTK_LINE cells which are just internal tessellation lines.
+        feature_edges = vtkFeatureEdges()
+        feature_edges.SetInputConnection(extr.GetOutputPort())
+        feature_edges.BoundaryEdgesOn()        # outer border edges
+        feature_edges.FeatureEdgesOn()         # sharp angle edges (e.g. 90° bends)
+        feature_edges.ManifoldEdgesOn()       # skip internal mesh edges (noise)
+        feature_edges.NonManifoldEdgesOn()     # keep non-manifold edges
+        feature_edges.SetFeatureAngle(20.0)    # angle threshold — edges sharper than this show
+        feature_edges.Update()
+        data_edges = feature_edges.GetOutput()
 
-        # Set up the face and edge mappers and actors
+        # Set up the face mapper and actor
         face_mapper = vtkMapper()
         face_actor = vtkActor()
         face_actor.SetMapper(face_mapper)
+
+        # Set up the edge mapper and actor
         edge_mapper = vtkMapper()
         edge_actor = vtkActor()
         edge_actor.SetMapper(edge_mapper)
 
-        # Update the faces
+        # Configure faces
         face_mapper.SetInputDataObject(data_faces)
         face_actor.SetPosition(*translation)
         face_actor.SetOrientation(*rotation)
         face_actor.GetProperty().SetColor(*color[:3])
         face_actor.GetProperty().SetOpacity(color[3])
+        # ✅ Proper shading so faces respond to light (light/dark sides)
+        face_actor.GetProperty().SetAmbient(0.4)
+        face_actor.GetProperty().SetDiffuse(0.6)
+        face_actor.GetProperty().SetSpecular(0.0)
+        face_mapper.SetResolveCoincidentTopologyToPolygonOffset()  # ✅ push faces back slightly so edges sit on top
+        face_mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(1.0, 1.0)
 
         # Allow the caller to control the edge width
         cur_edge_width = 1
@@ -76,21 +93,29 @@ def convert_assembly_to_vtk(assy, edge_width, color_theme, edge_color):
             cur_edge_width = edge_width
 
         # Allow a default edge color
-        if not edge_color:
-            edge_color = (1.0, 1.0, 1.0, 1.0)
+        if not edge_color or all(v == 0 for v in edge_color[:3]):
+            edge_color = (0.0, 0.0, 0.0, 1.0)
 
         # Allow the caller to control the edge opacity
         edge_opacity = 1.0
         if len(edge_color) > 3:
             edge_opacity = edge_color[3]
 
-        # Set up the edges
-        edge_mapper.SetInputDataObject(data_edges)
+        # Configure edges
+        edge_mapper.SetInputConnection(feature_edges.GetOutputPort())
+        edge_mapper.ScalarVisibilityOff()              # ✅ stop VTK using mesh scalar colors on edges
         edge_actor.SetPosition(*translation)
         edge_actor.SetOrientation(*rotation)
         edge_actor.GetProperty().SetColor(edge_color[0], edge_color[1], edge_color[2])
+        edge_actor.GetProperty().SetAmbientColor(edge_color[0], edge_color[1], edge_color[2])  # ✅ force ambient to exact color
+        edge_actor.GetProperty().SetDiffuseColor(edge_color[0], edge_color[1], edge_color[2]) # ✅ force diffuse too
+        edge_actor.GetProperty().SetAmbient(1.0)       # ✅ full ambient so color is always exact
+        edge_actor.GetProperty().SetDiffuse(0.0)       # ✅ no diffuse response to lights
+        edge_actor.GetProperty().SetSpecular(0.0)      # ✅ no specular
         edge_actor.GetProperty().SetOpacity(edge_opacity)
         edge_actor.GetProperty().SetLineWidth(cur_edge_width)
+        edge_actor.GetProperty().LightingOff()
+        edge_actor.GetProperty().RenderLinesAsTubesOff()
 
         # Handle all actors
         face_actors.append(face_actor)
@@ -126,6 +151,33 @@ def setup_render_window(face_actors, edge_actors, width, height, background_colo
     renderer.SetBackground(
         background_color[0], background_color[1], background_color[2]
     )
+
+    # ✅ 3-point lighting for realistic depth and shading
+    renderer.RemoveAllLights()
+
+    # Key light — main light from upper-right front
+    key_light = vtkLight()
+    key_light.SetPosition(1, 1, 1)
+    key_light.SetFocalPoint(0, 0, 0)
+    key_light.SetIntensity(0.8)
+    key_light.SetLightTypeToSceneLight()
+    renderer.AddLight(key_light)
+
+    # Fill light — softer, from left side to reduce harsh shadows
+    fill_light = vtkLight()
+    fill_light.SetPosition(-1, 0.5, -0.5)
+    fill_light.SetFocalPoint(0, 0, 0)
+    fill_light.SetIntensity(0.6)
+    fill_light.SetLightTypeToSceneLight()
+    renderer.AddLight(fill_light)
+
+    # Back/rim light — separates model from background
+    back_light = vtkLight()
+    back_light.SetPosition(0, -1, -1)
+    back_light.SetFocalPoint(0, 0, 0)
+    back_light.SetIntensity(0.1)
+    back_light.SetLightTypeToSceneLight()
+    renderer.AddLight(back_light)
 
     # Render the scene
     render_window.Render()
