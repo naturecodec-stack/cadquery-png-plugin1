@@ -118,7 +118,7 @@ for root, dirs, files in os.walk(INPUT_ROOT):
                 print("❌ Error in:", file)
                 print(e)
 ```
-
+## Running Tests
 
 ## Running Tests
 
@@ -130,8 +130,8 @@ pip install -e .[dev]
 
 2. Run the tests
 ```
-pytest ```
-
+pytest 
+```
 
 ## Acknowledgement
 
