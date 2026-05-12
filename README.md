@@ -1,88 +1,133 @@
 # cadquery-png-plugin
 
-*cadquery-png-plugin* is a PNG export plugin for [CadQuery](https://cadquery.readthedocs.io/en/latest/), which is a Python API for creating CAD models and assemblies. The core CadQuery library can export SVG images, but not bitmap images, such as PNG.
+This plugin converts CadQuery scripts (`.py`) into high-quality PNG images with accurate edge rendering and consistent shading, closely matching the original CadQuery dataset style.
+
+---
 
 ## Installation
 
-This plugin has not been released on PyPI, but it can be installed via `git` and `pip`.
+This plugin is not available on PyPI yet. You can install it directly from GitHub:
 
 ```bash
-pip install git+https://github.com/jmwright/cadquery-png-plugin.git
+pip install git+https://github.com/naturecodec-stack/cadquery-png-plugin1.git
 ```
 
 This installation will also install other required packages such as CadQuery if the environment does not already include them.
 
 ## Usage
 
-Below is a minimal example of this plugin being used to export a CadQuery assembly.
+Below is an example script for generating 8-view dataset images from CadQuery scripts.
 
 ```python
+import os
+import runpy
 import cadquery as cq
-import cadquery_png_plugin.plugin  # This registers the plugin with CadQuery
+import cadquery_png_plugin.plugin
 
-# You can customize the render options through a dictionary
-render_options = {"width": 600,  # width of the output image
-                  "height": 600,  # height of the output image
-                  "color_theme": "default",  # can also be black_and_white
-                  "view": "front-top-right",  # front, top, front-bottom-left, etc
-                  "zoom": 1.0  # zooms in and out on the center of the model
-                  }
+# =========================
+# CONFIG
+# =========================
 
-# Create a simple CadQuery assembly for an example export
-box = cq.Workplane().box(10, 10, 10)
-cyl = cq.Workplane().circle(2.5).extrude(5)
-assy = cq.Assembly(box, color=cq.Color(1.0, 0.0, 0.0))
-# assy.add(box, color=cq.Color(1.0, 0.0, 0.0))
-assy.add(cyl, loc=cq.Location(0, 0, 5.0), color=cq.Color(0.0, 0.0, 1.0))
+INPUT_ROOT = r"C:\Users\Desktop\inputfolder"
 
-# Do the PNG export
-assy.exportPNG(options=render_options, file_path="ouptput_file.png")
-```
+# OUTPUT image folder
+OUTPUT_ROOT = r"C:\Users\Desktop\image_8views"
 
-That code results in the following image.
+os.makedirs(OUTPUT_ROOT, exist_ok=True)
 
-![Sample PNG based on the script above](sample_image.png)
-
-It is also possible to pass a dictionary for the `view` parameter rather than using a named view.
-This allows for custom views.
-The view values provided below are equivalent to passing the string `front-top-right` for the `view` parameter. The parameter values shown below are also the default values for the view if any of the custom view parameters are omitted from the dictionary.
-
-```python
 render_options = {
-    "width": 1200,
-    "height": 1200,
-    "color_theme": "default",
-    "view": {
-        "view_up": (0, 1, 0),
-        "azimuth": 45,
-        "elevation": -45,
-        "roll": -55,
-        "window_center_x": -0.05,
-        "window_center_y": -0.05
-    },
-    "zoom": 1.0,
+    "width": 400,
+    "height": 400,
     "background_color": (1, 1, 1),
+    "color_theme": "default",
+    "view": "front-top-right",
+    "zoom": 0.9,
+    "show_edges": True,
+    "edge_color": (0, 0, 0),
+    "edge_width": 1.5
 }
+
+# ✅ Multiple angles (fix from your bug)
+# ✅ Correct angles
+angles = [0, 90, 180, 270]
+
+
+def render_model(solid, parts, base_name, output_dir):
+
+    for i, angle in enumerate(angles):
+
+        # Rotate each part individually
+        rotated_parts = [p.rotate((0, 0, 0), (0, 0, 1), angle) for p in parts]
+
+        # Build assembly from separate parts (no union — edges preserved)
+        assy_front = cq.Assembly()
+        for j, part in enumerate(rotated_parts):
+            assy_front.add(part, color=cq.Color(0.95, 0.95, 0.95), name=f"part_{j}")
+
+        front_file = os.path.join(output_dir, f"{base_name}_front_{i}.png")
+        assy_front.exportPNG(
+            options={**render_options, "view": "front-top-right"},
+            file_path=front_file
+        )
+
+        # Back views
+        rotated_parts_back = [p.rotate((0, 0, 0), (0, 1, 0), 180) for p in rotated_parts]
+
+        assy_back = cq.Assembly()
+        for j, part in enumerate(rotated_parts_back):
+            assy_back.add(part, color=cq.Color(0.95, 0.95, 0.95), name=f"part_{j}")
+
+        back_file = os.path.join(output_dir, f"{base_name}_back_{i}.png")
+        assy_back.exportPNG(
+            options={**render_options, "view": "front-top-right"},
+            file_path=back_file
+        )
+
+# =========================
+# MAIN LOOP
+# =========================
+
+for root, dirs, files in os.walk(INPUT_ROOT):
+
+    for file in files:
+
+        if file.endswith(".py"):
+
+            py_path = os.path.join(root, file)
+            print("Processing:", py_path)
+            try:
+                # Run CadQuery script
+                namespace = runpy.run_path(py_path)
+
+                if "solid" in namespace:
+                    solid = namespace["solid"]
+                    # Use parts list if available, otherwise fall back to single solid
+                    parts = namespace.get("parts", [solid])
+
+                    base_name = os.path.splitext(file)[0]
+                    rel_path = os.path.relpath(root, INPUT_ROOT)
+                    output_dir = os.path.join(OUTPUT_ROOT, rel_path)
+                    os.makedirs(output_dir, exist_ok=True)
+
+                    render_model(solid, parts, base_name, output_dir)
+
+                else:
+                    print("❌ No 'solid' variable in:", file)
+
+            except Exception as e:
+                print("❌ Error in:", file)
+                print(e)
 ```
 
-## Where this Plugin is Used
-
-An example of this plugin being used by a project in the wild can be found in the [Nimble repository](https://github.com/Wakoma/nimble/blob/c33497258f969392d91b2c30aa8d06ef7a2bd7ec/nimble_build_system/cad/renderer.py).
 
 ## Running Tests
 
-1. Clone the repository.
-```
-https://github.com/jmwright/cadquery-png-plugin.git && cd cadquery-png-plugin
-```
-
-2. Install the plugin and its development dependencies.
+1. Install the plugin and its development dependencies.
 ```
 pip install -e .
 pip install -e .[dev]
 ```
 
-3. Run the tests
+2. Run the tests
 ```
-pytest
-```
+pytest ```
