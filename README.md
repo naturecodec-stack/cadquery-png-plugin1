@@ -131,3 +131,14 @@ pip install -e .[dev]
 2. Run the tests
 ```
 pytest ```
+
+
+## Acknowledgement
+
+This project is based on the original repository:
+https://github.com/jmwright/cadquery-png-plugin
+
+Modifications include:
+- Improved edge rendering
+- Enhanced shading
+- Dataset-quality output
