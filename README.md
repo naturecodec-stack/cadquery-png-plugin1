@@ -135,10 +135,14 @@ pytest
 
 ## Acknowledgement
 
+## Acknowledgement
+
 This project is based on the original repository:
 https://github.com/jmwright/cadquery-png-plugin
 
-Modifications include:
-- Improved edge rendering
-- Enhanced shading
-- Dataset-quality output
+We acknowledge and appreciate the original authors for their contribution.
+
+### Modifications
+- Improved edge rendering using VTK feature edges
+- Enhanced shading and lighting consistency
+- Dataset-quality rendering output for machine learning workflows
