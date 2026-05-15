@@ -1,6 +1,6 @@
 # cadquery-png-plugin
 
-This plugin converts CadQuery scripts (`.py`) into high-quality PNG images with accurate edge rendering and consistent shading, closely matching the original CadQuery dataset style.
+This plugin converts CadQuery scripts (`.py`) into high-quality PNG images with accurate edge rendering and consistent shading, closely matching the original GenCAD dataset style.
 
 ---
 
